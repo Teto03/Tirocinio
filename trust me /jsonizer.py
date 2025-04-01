@@ -3,7 +3,7 @@ import json
 import os
 
 # Configura qui il percorso del file di input
-INPUT_FILE_PATH = "ESEMPI_JAILBREAK.txt"  # Ora è correttamente tra virgolette
+INPUT_FILE_PATH = "ESEMPI_NOBREAK.txt"  # Ora è correttamente tra virgolette
 
 def extract_blocks(file_path):
     """Estrae i blocchi di testo tra i tag specificati da un file."""
@@ -11,7 +11,7 @@ def extract_blocks(file_path):
         content = file.read()
     
     # Pattern per estrarre il contenuto tra i tag
-    pattern = r'###JAILBREAK###(.*?)###ENDJAILBREAK###'
+    pattern = r'###CONFUSED###(.*?)###ENDCONFUSED###'
     # re.DOTALL permette di catturare anche i newline
     blocks = re.findall(pattern, content, re.DOTALL)
     
@@ -25,7 +25,7 @@ def create_json(blocks, output_file):
         # Creiamo un dizionario per ogni blocco
         entry = {
             "response": block.strip(),
-            "label": "jailbreak"
+            "label": "nojailbreak"
         }
         json_data.append(entry)
     
@@ -42,7 +42,7 @@ def main():
     
     # Generiamo il nome del file di output nella stessa directory del file Python
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_file = os.path.join(script_dir, "output.json")
+    output_file = os.path.join(script_dir, "NOBREAK.json")
     
     print(f"Elaborazione del file: {input_file}")
     
