@@ -1,0 +1,255 @@
+! pip install transformers datasets evaluate torch accelerate -U
+# 'accelerate' è raccomandato per Trainer per ottimizzare l'uso della GPU/TPU
+
+
+
+
+
+-------------------------------------------------------------------------------------------------------
+
+# Disabilitiamo wandb, ma solo localmente in questa esecuzione (ormai hai creato l'account)
+import os
+os.environ["WANDB_MODE"] = "offline"  # Questa opzione funziona offline ma salva i log localmente
+
+# Reimportiamo le librerie necessarie
+import numpy as np
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+import evaluate
+TestBert.ipynb
+TestBert.ipynb_
+File
+Analizza i tuoi file con codice scritto da Gemini
+..
+Trascina i file per caricarli nello spazio di archiviazione della sessione.
+Disco
+75.50 GB disponibili
+
+[ ]
+! pip install transformers datasets evaluate torch accelerate -U
+# 'accelerate' è raccomandato per Trainer per ottimizzare l'uso della GPU/TPU
+
+[ ]
+# Disabilitiamo wandb, ma solo localmente in questa esecuzione (ormai hai creato l'account)
+import os
+os.environ["WANDB_MODE"] = "offline"  # Questa opzione funziona offline ma salva i log localmente
+
+# Reimportiamo le librerie necessarie
+import numpy as np
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+import evaluate
+
+
+
+
+# Carichiamo nuovamente il dataset
+data_files = {
+    "train": "translated_merged_responses.json",
+    "test": "test.json"
+}
+
+dataset = load_dataset('json', data_files=data_files)
+
+# Analizziamo brevemente il dataset
+print("Struttura del dataset:")
+print(dataset)
+print("\nColonne nel dataset train:")
+print(dataset["train"].column_names)
+print("\nPrimo esempio nel dataset:")
+print(dataset["train"][0])
+
+# Determiniamo i nomi corretti delle colonne
+# Questo codice cercherà automaticamente le colonne che contengono testo e etichette
+first_example = dataset["train"][0]
+text_column = None
+label_column = None
+
+# Trova la colonna del testo (la colonna con stringhe più lunghe)
+longest_text_len = 0
+for col in first_example:
+    if isinstance(first_example[col], str) and len(first_example[col]) > longest_text_len:
+        longest_text_len = len(first_example[col])
+        text_column = col
+
+# Trova la colonna delle etichette (cerca 'label' o simili)
+for col in first_example:
+    if 'label' in col.lower() or 'class' in col.lower() or 'category' in col.lower():
+        label_column = col
+        break
+
+if text_column is None:
+    raise ValueError("Non è stata trovata una colonna di testo. Specifica manualmente il nome della colonna.")
+
+if label_column is None:
+    # Se non troviamo una colonna di etichette evidente, utilizziamo una colonna non di testo
+    for col in first_example:
+        if col != text_column and not isinstance(first_example[col], str):
+            label_column = col
+            break
+
+print(f"\nColonna di testo identificata: '{text_column}'")
+print(f"Colonna di etichette identificata: '{label_column}'")
+
+# Verifichiamo il tipo delle etichette e le trasformiamo in numeri interi
+def get_unique_labels(examples):
+    labels = examples[label_column]
+    unique_labels = set()
+    for label in labels:
+        if isinstance(label, list):
+            for l in label:
+                unique_labels.add(l)
+        else:
+            unique_labels.add(label)
+    return list(unique_labels)
+
+unique_labels = get_unique_labels(dataset["train"])
+print(f"\nEtichette uniche trovate: {unique_labels}")
+
+# Creiamo un mapping delle etichette agli ID
+label_to_id = {label: i for i, label in enumerate(sorted(unique_labels))}
+id_to_label = {i: label for label, i in label_to_id.items()}
+
+print(f"\nMapping etichette -> ID: {label_to_id}")
+
+# Funzione per preprocessare le etichette
+def preprocess_labels(examples):
+    # Copia gli esempi per non modificare il dataset originale
+    result = dict(examples)
+
+    # Converti le etichette in interi
+    labels = examples[label_column]
+    processed_labels = []
+
+    for label in labels:
+        if isinstance(label, list):
+            # Se l'etichetta è una lista, prendi il primo elemento
+            if label:
+                processed_labels.append(label_to_id[label[0]])
+            else:
+                processed_labels.append(0)  # Valore di default
+        else:
+            # Se l'etichetta è un singolo valore
+            processed_labels.append(label_to_id[label])
+
+    # Sostituisci la colonna originale con le etichette processate
+    result[label_column] = processed_labels
+    return result
+
+# Applica il preprocessing alle etichette
+processed_dataset = dataset.map(preprocess_labels, batched=True)
+
+# Scegliamo il modello e il tokenizer
+model_checkpoint = "bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+
+# Funzione per tokenizzare il testo
+def tokenize_function(examples):
+    return tokenizer(
+        examples[text_column],
+        padding="max_length",
+        truncation=True,
+        max_length=128  # Imposta una lunghezza appropriata
+    )
+
+# Applica la tokenizzazione
+tokenized_datasets = processed_dataset.map(tokenize_function, batched=True)
+
+# Prepara il dataset per PyTorch
+tokenized_datasets = tokenized_datasets.remove_columns([col for col in processed_dataset["train"].column_names if col != label_column])
+tokenized_datasets = tokenized_datasets.rename_column(label_column, "labels")
+tokenized_datasets.set_format("torch")
+
+# Crea un validation set separato dal train set
+train_testvalid = tokenized_datasets["train"].train_test_split(test_size=0.2, seed=42)
+train_dataset = train_testvalid["train"]
+validation_dataset = train_testvalid["test"]
+test_dataset = tokenized_datasets["test"]
+
+# Crea subset piccoli per test (opzionale)
+small_train_dataset = train_dataset.shuffle(seed=42).select(range(min(1000, len(train_dataset))))
+small_eval_dataset = validation_dataset.shuffle(seed=42).select(range(min(200, len(validation_dataset))))
+
+# Imposta le metriche
+metric = evaluate.load("accuracy")
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    accuracy = metric.compute(predictions=predictions, references=labels)
+
+    # Aggiungi più metriche se necessario
+    from sklearn.metrics import precision_recall_fscore_support
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average='weighted')
+    metrics = {
+        'accuracy': accuracy['accuracy'],
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
+    }
+    return metrics
+
+# Carica il modello con il numero corretto di etichette
+num_labels = len(label_to_id)
+model = AutoModelForSequenceClassification.from_pretrained(
+    model_checkpoint,
+    num_labels=num_labels
+)
+
+# Configura l'addestramento
+output_directory = "my-bert-fine-tuned-model"
+
+# Imposta gli argomenti di addestramento
+training_args = TrainingArguments(
+    output_dir=output_directory,
+    evaluation_strategy="epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    num_train_epochs=3,
+    weight_decay=0.01,
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    metric_for_best_model="f1",
+    save_total_limit=2,
+    report_to="none"  # Disabilita completamente wandb e altri logger
+)
+
+# Inizializza il Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=small_train_dataset,  # Usa train_dataset per l'addestramento completo
+    eval_dataset=small_eval_dataset,    # Usa validation_dataset per l'addestramento completo
+    tokenizer=tokenizer,
+    compute_metrics=compute_metrics,
+)
+
+# Addestra il modello
+print("Inizio addestramento...")
+trainer.train()
+print("Addestramento completato!")
+
+# Valutazione sul test set
+print("Valutazione sul test set...")
+test_results = trainer.evaluate(test_dataset)
+print("Risultati test:", test_results)
+
+# Salva il modello
+trainer.save_model(output_directory)
+tokenizer.save_pretrained(output_directory)
+print(f"Modello e tokenizer salvati in {output_directory}")
+
+# Stampa il dizionario delle etichette per utilizzo futuro
+print("\nDizionario delle etichette (utile per interpretare le previsioni):")
+print(id_to_label)
+
+# Esempio di come utilizzare il modello:
+print("\nEsempio di utilizzo del modello:")
+print("from transformers import AutoModelForSequenceClassification, AutoTokenizer")
+print("model = AutoModelForSequenceClassification.from_pretrained(\"" + output_directory + "\")")
+print("tokenizer = AutoTokenizer.from_pretrained(\"" + output_directory + "\")")
+print("inputs = tokenizer(\"Esempio di testo\", return_tensors=\"pt\")")
+print("outputs = model(**inputs)")
+print("predictions = outputs.logits.argmax(-1).item()")
+print("etichetta_prevista = id_to_label[predictions]  # Converti l'ID nell'etichetta originale")
